@@ -44,3 +44,6 @@ The application uses drug interaction data parsed from open-source datasets (Dru
 
 ## ⚖️ Disclaimer
 *This tool is for informational purposes only. The data provided may not be exhaustive or up-to-date. Always consult a healthcare professional for medical advice.*
+
+## 📄 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
