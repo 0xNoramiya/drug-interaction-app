@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Data
+data/*.db
+*.sqlite
+*.sqlite3
+
+# Docker
+.dockerignore
+
+# JS/Node (Just in case)
+node_modules/
+npm-debug.log
+dist/
+.DS_Store
+
+# OS
+.DS_Store
+Thumbs.db
