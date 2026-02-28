@@ -7,12 +7,13 @@ if [ ! -f "data/interactions.db" ]; then
     echo "Contents of data/:"
     ls -l data/
     
-    # Try to generate it if CSV exists
-    if [ -f "db_drug_interactions.csv" ]; then
-        echo "Found CSV, generating database..."
+    # Generate from XML source of truth
+    if [ -f "full database.xml" ]; then
+        echo "Found full database.xml, generating database..."
         python scripts/parse_drugbank.py
     else
-        echo "CSV also not found. Cannot generate database."
+        echo "full database.xml not found. Cannot generate database."
+        exit 1
     fi
 else
     echo "Database found."

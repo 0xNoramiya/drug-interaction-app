@@ -5,49 +5,101 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Drug Interaction Checker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Fraunces:wght@600;700&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
 </head>
 
 <body>
   <div class="container">
-    <header>
+    <header class="app-header">
       <h1>Drug Interaction Checker</h1>
-      <p class="subtitle">Check for potential interactions between multiple medications.</p>
     </header>
 
-    <main>
-      <div class="card input-card">
-        <div class="search-container">
-          <input type="text" id="drug-input" placeholder="Enter drug name (e.g. Aspirin)..." autocomplete="off">
-          <button id="add-btn">Add Drug</button>
-          <div id="suggestions" class="suggestions-list hidden"></div>
+    <main class="app-main">
+      <section id="auth-screen" class="screen">
+        <div class="auth-grid">
+          <div class="card auth-card">
+            <h2>Login</h2>
+            <input type="text" id="login-email" placeholder="Email or username" autocomplete="username">
+            <input type="password" id="login-password" placeholder="Password" autocomplete="current-password">
+            <button id="login-btn" class="primary-btn">Login</button>
+          </div>
+
+          <div class="card auth-card">
+            <h2>Register</h2>
+            <input type="text" id="register-email" placeholder="Email or username" autocomplete="username">
+            <input type="password" id="register-password" placeholder="Password (min 8 chars)"
+              autocomplete="new-password">
+            <button id="register-btn" class="secondary-btn">Create Account</button>
+          </div>
+        </div>
+        <p id="auth-status" class="status-text"></p>
+      </section>
+
+      <section id="session-bar" class="card session-bar hidden">
+        <div>
+          <p id="session-email" class="session-email"></p>
+          <p id="session-role" class="session-role"></p>
+        </div>
+        <button id="logout-btn" class="ghost-btn">Logout</button>
+      </section>
+
+      <section id="user-screen" class="screen hidden">
+        <div class="card panel-card">
+          <div class="panel-head">
+            <h2>User Panel</h2>
+            <button id="request-premium-btn" class="secondary-btn">Request Premium</button>
+          </div>
+          <p id="user-plan" class="panel-copy"></p>
+          <p id="user-quota" class="panel-copy"></p>
+          <p id="user-status" class="status-text"></p>
         </div>
 
-        <div class="tags-container" id="drug-tags">
-          <!-- Added drugs will appear here -->
+        <div class="card input-card">
+          <div class="panel-head">
+            <h2>Check Interactions</h2>
+          </div>
+          <div class="search-container">
+            <input type="text" id="drug-input" placeholder="Enter drug name" autocomplete="off">
+            <button id="add-btn">Add Drug</button>
+            <div id="suggestions" class="suggestions-list hidden"></div>
+          </div>
+
+          <div class="tags-container" id="drug-tags"></div>
+
+          <div class="actions">
+            <button id="check-btn" class="primary-btn">Check</button>
+            <button id="clear-btn" class="ghost-btn">Clear</button>
+          </div>
         </div>
 
-        <div class="actions">
-          <button id="check-btn" class="primary-btn">Check Interactions</button>
-          <button id="clear-btn" class="secondary-btn">Clear All</button>
+        <div id="results-section" class="hidden">
+          <div class="card list-card">
+            <h2>Interaction Details</h2>
+            <div id="interaction-list"></div>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div id="results-section" class="hidden">
-        <div class="card list-card">
-          <h2>Interaction Details</h2>
-          <div id="interaction-list"></div>
+      <section id="admin-screen" class="screen hidden">
+        <div class="card admin-card">
+          <div class="panel-head">
+            <h2>Admin Panel</h2>
+            <button id="refresh-admin-btn" class="ghost-btn">Refresh</button>
+          </div>
+          <p id="admin-status" class="status-text"></p>
+
+          <h3 class="section-title">Users</h3>
+          <div id="admin-users" class="admin-list"></div>
+
+          <h3 class="section-title">Premium Requests</h3>
+          <div id="admin-requests" class="admin-list"></div>
         </div>
-      </div>
+      </section>
     </main>
-
-    <footer>
-      <div class="disclaimer">
-        <strong>Medical Disclaimer:</strong> This tool is for informational purposes only. The data is based on
-        open-source datasets (DrugBank) and may not be exhaustive. Always consult a healthcare professional for medical
-        advice.
-      </div>
-    </footer>
   </div>
   <script src="/app.js"></script>
 </body>
