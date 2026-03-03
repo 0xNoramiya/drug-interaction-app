@@ -1,5 +1,5 @@
 import re
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, constr, validator
 
@@ -125,6 +125,7 @@ class UserProfile(BaseModel):
     is_premium: bool
     is_active: bool
     created_at: int
+    theme_preference: Literal["light", "dark", "system"] = "system"
 
 
 class AuthResponse(BaseModel):
@@ -174,3 +175,37 @@ class AdminUserResponse(BaseModel):
     is_active: bool
     created_at: int
     checks_today: int
+
+
+class ThemePreferenceRequest(BaseModel):
+    theme_preference: Literal["light", "dark", "system"]
+
+
+class PhysicianSummary(BaseModel):
+    risk_level: Literal["low", "moderate", "high", "unknown"]
+    title: constr(strip_whitespace=True, min_length=1, max_length=180)
+    summary: constr(strip_whitespace=True, min_length=1, max_length=1200)
+    key_points: List[constr(strip_whitespace=True, min_length=1, max_length=240)]
+    recommendations: List[constr(strip_whitespace=True, min_length=1, max_length=240)]
+    disclaimer: constr(strip_whitespace=True, min_length=1, max_length=400)
+    generated_at: int
+
+    @validator("key_points", "recommendations")
+    def validate_summary_lists(cls, value):
+        if len(value) > 8:
+            raise ValueError("A maximum of 8 items is allowed")
+        return value
+
+
+class CheckHistoryEntryResponse(BaseModel):
+    id: int
+    check_type: Literal["manual", "ocr"]
+    source_language: Literal["en", "id"]
+    input_drugs: List[str]
+    extracted_drugs: List[str]
+    matched_drugs: List[str]
+    unmatched_drugs: List[str]
+    interactions: List[Interaction]
+    advice: Optional[AIAdvice]
+    physician_summary: Optional[PhysicianSummary]
+    created_at: int

@@ -39,6 +39,12 @@ def init_app_db():
         """
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+    cursor.execute("PRAGMA table_info(users)")
+    user_columns = {row[1] for row in cursor.fetchall()}
+    if "theme_preference" not in user_columns:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN theme_preference TEXT NOT NULL DEFAULT 'system'"
+        )
 
     cursor.execute(
         """
@@ -99,6 +105,41 @@ def init_app_db():
         """
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_blocked_until ON auth_rate_limits(blocked_until)")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS physician_profiles (
+            user_id INTEGER PRIMARY KEY,
+            physician_name TEXT NOT NULL DEFAULT '',
+            physician_email TEXT NOT NULL DEFAULT '',
+            physician_notes TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS check_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            check_type TEXT NOT NULL CHECK(check_type IN ('manual', 'ocr')),
+            source_language TEXT NOT NULL DEFAULT 'en',
+            input_drugs_json TEXT NOT NULL,
+            extracted_drugs_json TEXT NOT NULL,
+            matched_drugs_json TEXT NOT NULL,
+            unmatched_drugs_json TEXT NOT NULL,
+            interactions_json TEXT NOT NULL,
+            ai_advice_json TEXT,
+            physician_summary_json TEXT,
+            physician_summary_generated_at INTEGER,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_check_history_user_created ON check_history(user_id, created_at DESC)")
 
     conn.commit()
     conn.close()
