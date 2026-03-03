@@ -136,10 +136,17 @@ MAX_OCR_IMAGE_BYTES = int(os.getenv("MAX_OCR_IMAGE_BYTES", str(8 * 1024 * 1024))
 OCR_ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _openai_client: Optional["OpenAI"] = None
 _openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
-AI_ADVICE_DISCLAIMER = (
-    "This guidance is informational only and not medical advice. "
-    "Please consult a licensed healthcare professional before making medication decisions."
-)
+DEFAULT_LANGUAGE = "en"
+AI_ADVICE_DISCLAIMER_BY_LANGUAGE = {
+    "en": (
+        "This guidance is informational only and not medical advice. "
+        "Please consult a licensed healthcare professional before making medication decisions."
+    ),
+    "id": (
+        "Panduan ini hanya untuk informasi dan bukan nasihat medis. "
+        "Silakan konsultasikan dengan tenaga kesehatan berlisensi sebelum mengambil keputusan terkait obat."
+    ),
+}
 
 SYNONYMS = {
     "aspirin": "acetylsalicylic acid",
@@ -188,6 +195,27 @@ def utc_now_ts() -> int:
 
 def utc_today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def normalize_language(value: Optional[str]) -> str:
+    if not value:
+        return DEFAULT_LANGUAGE
+
+    primary = value.split(",", 1)[0].strip().lower().replace("_", "-")
+    if primary.startswith("id") or primary.startswith("in"):
+        return "id"
+    if primary.startswith("en"):
+        return "en"
+    return DEFAULT_LANGUAGE
+
+
+def resolve_request_language(request: Request) -> str:
+    preferred = request.headers.get("x-language") or request.headers.get("accept-language")
+    return normalize_language(preferred)
+
+
+def advice_disclaimer(language: str) -> str:
+    return AI_ADVICE_DISCLAIMER_BY_LANGUAGE.get(language, AI_ADVICE_DISCLAIMER_BY_LANGUAGE[DEFAULT_LANGUAGE])
 
 
 def hash_token(token: str) -> str:
@@ -783,7 +811,12 @@ def read_and_validate_ocr_image(file: UploadFile) -> Tuple[bytes, str]:
     return image_bytes, detected_mime
 
 
-def build_fallback_advice(interaction_count: int, matched_count: int, unmatched_count: int) -> AIAdvice:
+def build_fallback_advice(
+    interaction_count: int,
+    matched_count: int,
+    unmatched_count: int,
+    language: str = DEFAULT_LANGUAGE,
+) -> AIAdvice:
     if interaction_count >= 3:
         risk_level = "high"
     elif interaction_count > 0:
@@ -793,27 +826,44 @@ def build_fallback_advice(interaction_count: int, matched_count: int, unmatched_
     else:
         risk_level = "unknown"
 
-    if interaction_count > 0:
-        summary = "Potential drug interactions were found. Review each interaction before combining these medicines."
-    elif matched_count >= 2:
-        summary = "No direct interaction records were found in the current dataset for the detected medicines."
-    else:
-        summary = "Not enough recognized medicines were detected to produce a full interaction assessment."
+    if language == "id":
+        if interaction_count > 0:
+            summary = "Potensi interaksi obat ditemukan. Tinjau setiap interaksi sebelum menggabungkan obat-obatan ini."
+        elif matched_count >= 2:
+            summary = "Tidak ditemukan catatan interaksi langsung pada dataset saat ini untuk obat yang terdeteksi."
+        else:
+            summary = "Obat yang dikenali belum cukup untuk membuat penilaian interaksi yang lengkap."
 
-    action_items = [
-        "Verify medicine names and strengths against the original prescription labels.",
-        "Consult a pharmacist or physician before changing or combining medications.",
-    ]
-    if interaction_count > 0:
-        action_items.append("Seek urgent care if severe symptoms appear after taking these medicines together.")
-    if unmatched_count > 0:
-        action_items.append("Re-upload a clearer image for medicines that could not be matched in the database.")
+        action_items = [
+            "Verifikasi nama dan kekuatan obat sesuai label resep asli.",
+            "Konsultasikan dengan apoteker atau dokter sebelum mengubah atau menggabungkan obat.",
+        ]
+        if interaction_count > 0:
+            action_items.append("Segera cari pertolongan medis jika muncul gejala berat setelah mengonsumsi obat bersama.")
+        if unmatched_count > 0:
+            action_items.append("Unggah ulang gambar yang lebih jelas untuk obat yang belum dapat dicocokkan.")
+    else:
+        if interaction_count > 0:
+            summary = "Potential drug interactions were found. Review each interaction before combining these medicines."
+        elif matched_count >= 2:
+            summary = "No direct interaction records were found in the current dataset for the detected medicines."
+        else:
+            summary = "Not enough recognized medicines were detected to produce a full interaction assessment."
+
+        action_items = [
+            "Verify medicine names and strengths against the original prescription labels.",
+            "Consult a pharmacist or physician before changing or combining medications.",
+        ]
+        if interaction_count > 0:
+            action_items.append("Seek urgent care if severe symptoms appear after taking these medicines together.")
+        if unmatched_count > 0:
+            action_items.append("Re-upload a clearer image for medicines that could not be matched in the database.")
 
     return AIAdvice(
         risk_level=risk_level,
         summary=summary,
         action_items=action_items[:5],
-        safety_note=AI_ADVICE_DISCLAIMER,
+        safety_note=advice_disclaimer(language),
     )
 
 
@@ -989,8 +1039,10 @@ def generate_ai_advice(
     matched_drugs: List[str],
     unmatched_drugs: List[str],
     interactions: List[Interaction],
+    language: str = DEFAULT_LANGUAGE,
 ) -> AIAdvice:
     client = get_openai_client()
+    target_language = "Bahasa Indonesia" if language == "id" else "English"
     prompt_payload = {
         "detected_drugs": extracted_drugs,
         "matched_drugs": matched_drugs,
@@ -1024,6 +1076,7 @@ def generate_ai_advice(
                         "Use confident, direct wording based only on the provided interaction data. "
                         "Avoid weak hedging terms unless the data is incomplete. "
                         "Keep summary concise, action_items practical, and avoid diagnosis. "
+                        f"Write summary, action_items, and safety_note in {target_language}. "
                         "The safety_note must explicitly tell the user to consult a licensed healthcare professional."
                     ),
                 },
@@ -1059,13 +1112,14 @@ def generate_ai_advice(
             safety_note=str(payload.get("safety_note", "")).strip(),
         )
         # Enforce mandatory disclaimer server-side.
-        advice.safety_note = AI_ADVICE_DISCLAIMER
+        advice.safety_note = advice_disclaimer(language)
         return advice
     except Exception:
         return build_fallback_advice(
             interaction_count=len(interactions),
             matched_count=len(matched_drugs),
             unmatched_count=len(unmatched_drugs),
+            language=language,
         )
 
 
@@ -1460,6 +1514,7 @@ def check_interactions(request: InteractionCheckRequest, session_data=Depends(ge
 
 @app.post("/check/ocr", response_model=OCRInteractionResponse)
 def check_interactions_ocr(
+    request: Request,
     files: List[UploadFile] = File(...),
     session_data=Depends(get_authenticated_session),
 ):
@@ -1503,12 +1558,14 @@ def check_interactions_ocr(
     extracted_drugs = [display_map.get(name, name.title()) for name in cleaned_names]
     matched_drugs = [display_map.get(name, name.title()) for name in matched_cleaned_names]
     unmatched_drugs = [display_map.get(name, name.title()) for name in cleaned_names if name not in matched_set]
+    ui_language = resolve_request_language(request)
 
     advice = generate_ai_advice(
         extracted_drugs=extracted_drugs,
         matched_drugs=matched_drugs,
         unmatched_drugs=unmatched_drugs,
         interactions=interactions,
+        language=ui_language,
     )
 
     app_conn = get_app_db_connection()

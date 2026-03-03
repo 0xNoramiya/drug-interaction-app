@@ -1,0 +1,48 @@
+#lang-toggle {
+  position: fixed;
+  bottom: 14px;
+  right: 14px;
+  z-index: 99999;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid #c9e6e2;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+#lang-toggle button {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+#lang-toggle button:hover {
+  background: #f0fdfa;
+}
+
+#lang-toggle button.active {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+@media (max-width: 640px) {
+  #lang-toggle {
+    bottom: 10px;
+    right: 10px;
+    padding: 5px;
+  }
+
+  #lang-toggle button {
+    padding: 7px 9px;
+    font-size: 11px;
+  }
+}
