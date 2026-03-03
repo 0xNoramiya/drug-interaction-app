@@ -72,7 +72,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `MAX_OCR_IMAGE_BYTES` (default: `8388608`)
 - `FREE_DAILY_LIMIT` (default: `10`)
 - `CORS_ALLOWED_ORIGINS` (CSV list)
-- `ALLOWED_HOSTS` (CSV list)
+- `ALLOWED_HOSTS` (optional CSV list). If unset, all hosts are accepted. For strict mode, set values like `api.example.com,www.example.com` (scheme/port are tolerated and normalized).
 - `SESSION_TTL_SECONDS`
 - `SESSION_COOKIE_NAME`
 - `COOKIE_SECURE` (`true` in HTTPS production)

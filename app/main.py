@@ -59,12 +59,39 @@ def parse_cors_origins() -> List[str]:
 
 def parse_allowed_hosts() -> List[str]:
     hosts_raw = os.getenv("ALLOWED_HOSTS", "").strip()
-    if hosts_raw:
-        hosts = [host.strip().lower() for host in hosts_raw.split(",") if host.strip()]
-        if "*" in hosts:
+    if not hosts_raw:
+        # Avoid deployment breakage (Invalid host header) when not configured.
+        return ["*"]
+
+    hosts: List[str] = []
+    for raw_host in hosts_raw.split(","):
+        host = raw_host.strip().lower()
+        if not host:
+            continue
+
+        if host == "*":
             return ["*"]
-        return hosts
-    return ["localhost", "127.0.0.1", "[::1]"]
+
+        # Accept entries like https://api.example.com:443/path and normalize.
+        if "://" in host:
+            host = host.split("://", 1)[1]
+        host = host.split("/", 1)[0]
+
+        # Preserve IPv6 bracket form while removing optional port suffix.
+        if host.startswith("[") and "]" in host:
+            closing = host.find("]")
+            host = host[: closing + 1]
+        elif ":" in host:
+            host = host.split(":", 1)[0]
+
+        if host:
+            hosts.append(host)
+
+    if not hosts:
+        return ["*"]
+
+    # Deduplicate while preserving order.
+    return list(dict.fromkeys(hosts))
 
 
 def env_bool(name: str, default: bool = False) -> bool:
