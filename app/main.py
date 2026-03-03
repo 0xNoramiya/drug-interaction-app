@@ -118,6 +118,8 @@ AUTH_MAX_FAILED_ATTEMPTS = int(os.getenv("AUTH_MAX_FAILED_ATTEMPTS", "8"))
 AUTH_WINDOW_SECONDS = int(os.getenv("AUTH_WINDOW_SECONDS", str(15 * 60)))
 AUTH_BLOCK_SECONDS = int(os.getenv("AUTH_BLOCK_SECONDS", str(15 * 60)))
 ENABLE_HSTS = env_bool("ENABLE_HSTS", False)
+OCR_SCAN_CREDIT_COST = 3
+MAX_OCR_IMAGES_PER_SCAN = 3
 MAX_DRUGS_PER_CHECK = 25
 MAX_DRUG_NAME_LENGTH = 200
 
@@ -482,7 +484,10 @@ def require_admin(session_data=Depends(get_authenticated_session)):
     return session_data
 
 
-def consume_check_quota(conn: sqlite3.Connection, user_id: int, is_premium: bool) -> QuotaStatus:
+def consume_check_quota(conn: sqlite3.Connection, user_id: int, is_premium: bool, cost: int = 1) -> QuotaStatus:
+    if cost < 1:
+        raise ValueError("cost must be at least 1")
+
     today = utc_today()
     cursor = conn.cursor()
 
@@ -502,28 +507,39 @@ def consume_check_quota(conn: sqlite3.Connection, user_id: int, is_premium: bool
     row = cursor.fetchone()
     used = int(row["check_count"]) if row else 0
 
-    if (not is_premium) and used >= FREE_DAILY_LIMIT:
+    if (not is_premium) and (used + cost > FREE_DAILY_LIMIT):
         conn.rollback()
+        remaining = max(FREE_DAILY_LIMIT - used, 0)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Daily free limit reached ({FREE_DAILY_LIMIT} checks/day). Upgrade to premium for unlimited checks.",
+            detail=(
+                f"Not enough credits for this action ({cost} required, {remaining} remaining today). "
+                "Upgrade to premium for unlimited checks."
+            ),
         )
 
     cursor.execute(
-        "UPDATE daily_usage SET check_count = check_count + 1 WHERE user_id = ? AND usage_date = ?",
-        (user_id, today),
+        "UPDATE daily_usage SET check_count = check_count + ? WHERE user_id = ? AND usage_date = ?",
+        (cost, user_id, today),
     )
     conn.commit()
 
     return get_quota_status(conn, user_id, is_premium)
 
 
-def require_quota_available(conn: sqlite3.Connection, user_id: int, is_premium: bool) -> None:
+def require_quota_available(conn: sqlite3.Connection, user_id: int, is_premium: bool, cost: int = 1) -> None:
+    if cost < 1:
+        raise ValueError("cost must be at least 1")
+
     quota = get_quota_status(conn, user_id, is_premium)
-    if (not is_premium) and quota.remaining_today == 0:
+    remaining = quota.remaining_today or 0
+    if (not is_premium) and (remaining < cost):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Daily free limit reached ({FREE_DAILY_LIMIT} checks/day). Upgrade to premium for unlimited checks.",
+            detail=(
+                f"Not enough credits for this action ({cost} required, {remaining} remaining today). "
+                "Upgrade to premium for unlimited checks."
+            ),
         )
 
 
@@ -1324,19 +1340,36 @@ def check_interactions(request: InteractionCheckRequest, session_data=Depends(ge
 
 @app.post("/check/ocr", response_model=OCRInteractionResponse)
 def check_interactions_ocr(
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     session_data=Depends(get_authenticated_session),
 ):
     user = session_data["user"]
+    ocr_cost = OCR_SCAN_CREDIT_COST if not user["is_premium"] else 1
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one image is required")
+    if len(files) > MAX_OCR_IMAGES_PER_SCAN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"A maximum of {MAX_OCR_IMAGES_PER_SCAN} images is allowed per scan.",
+        )
 
     app_conn = get_app_db_connection()
     try:
-        require_quota_available(app_conn, user["id"], user["is_premium"])
+        require_quota_available(app_conn, user["id"], user["is_premium"], cost=ocr_cost)
     finally:
         app_conn.close()
 
-    image_bytes, mime_type = read_and_validate_ocr_image(file)
-    extracted_candidates = extract_drugs_from_image(image_bytes, mime_type)
+    extracted_candidates: List[str] = []
+    for file in files:
+        image_bytes, mime_type = read_and_validate_ocr_image(file)
+        try:
+            extracted_candidates.extend(extract_drugs_from_image(image_bytes, mime_type))
+        except HTTPException as exc:
+            # Allow mixed-quality uploads: continue if one image has no detected drug names.
+            if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
+                continue
+            raise
+
     cleaned_names, display_map = normalize_drug_candidates(extracted_candidates)
     if not cleaned_names:
         raise HTTPException(
@@ -1359,7 +1392,7 @@ def check_interactions_ocr(
 
     app_conn = get_app_db_connection()
     try:
-        quota = consume_check_quota(app_conn, user["id"], user["is_premium"])
+        quota = consume_check_quota(app_conn, user["id"], user["is_premium"], cost=ocr_cost)
     finally:
         app_conn.close()
 

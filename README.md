@@ -9,7 +9,7 @@ Drug Interaction Checker is a FastAPI + SQLite web application for medication in
 - Usage controls: free users are limited to 10 checks/day, premium users are unlimited
 - Drug search autocomplete from DrugBank-derived data
 - Interaction checking across selected medicines with duplicate-pair normalization
-- OCR upload endpoint (`/check/ocr`) for extracting drug names from prescription images
+- OCR upload endpoint (`/check/ocr`) for extracting drug names from up to 3 images per scan
 - AI advice output with mandatory healthcare-professional disclaimer
 
 ## Tech Stack
@@ -95,7 +95,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ## Operational Notes
 - The first registered user becomes admin automatically.
 - Admin users can activate/deactivate premium status and review premium requests.
-- OCR checks consume the same daily quota as manual checks.
+- Manual checks consume 1 credit.
+- OCR scans consume 3 credits for free users.
+- OCR scans accept a maximum of 3 images per request.
 
 ## Medical Disclaimer
 This application is for informational use only and does not replace clinical judgment. Always consult a licensed healthcare professional for diagnosis and treatment decisions.

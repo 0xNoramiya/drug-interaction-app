@@ -1,4 +1,6 @@
 const API_BASE = window.location.hostname === "localhost" ? "http://localhost:8000" : "";
+const OCR_SCAN_CREDIT_COST = 3;
+const MAX_OCR_IMAGES_PER_SCAN = 3;
 let currentUser = null;
 let currentQuota = null;
 let selectedDrugs = new Set();
@@ -125,7 +127,7 @@ function getQuotaSummary(quota) {
     if (quota.is_premium) {
         return `Usage today: ${quota.used_today}. Unlimited checks.`;
     }
-    return `Usage today: ${quota.used_today}/${quota.daily_limit}. Remaining: ${quota.remaining_today}.`;
+    return `Usage today: ${quota.used_today}/${quota.daily_limit}. Remaining: ${quota.remaining_today}. OCR scan costs ${OCR_SCAN_CREDIT_COST} credits.`;
 }
 
 function renderRoute() {
@@ -149,9 +151,10 @@ function renderRoute() {
         userPlan.textContent = premium ? "Premium Account" : "Free Account";
         userQuota.textContent = getQuotaSummary(currentQuota);
         requestPremiumBtn.classList.toggle("hidden", premium);
-        const outOfQuota = !premium && currentQuota && currentQuota.remaining_today === 0;
-        checkBtn.disabled = Boolean(outOfQuota);
-        ocrBtn.disabled = Boolean(outOfQuota);
+        const checkOutOfQuota = !premium && currentQuota && currentQuota.remaining_today === 0;
+        const ocrOutOfQuota = !premium && currentQuota && currentQuota.remaining_today < OCR_SCAN_CREDIT_COST;
+        checkBtn.disabled = Boolean(checkOutOfQuota);
+        ocrBtn.disabled = Boolean(ocrOutOfQuota);
     }
 }
 
@@ -487,14 +490,18 @@ async function scanImage() {
         return;
     }
 
-    const file = ocrFileInput.files && ocrFileInput.files[0];
-    if (!file) {
-        setStatus(userStatus, "Select an image first.", true);
+    const files = Array.from(ocrFileInput.files || []);
+    if (!files.length) {
+        setStatus(userStatus, "Select at least one image.", true);
+        return;
+    }
+    if (files.length > MAX_OCR_IMAGES_PER_SCAN) {
+        setStatus(userStatus, `You can upload up to ${MAX_OCR_IMAGES_PER_SCAN} images per scan.`, true);
         return;
     }
 
     const formData = new FormData();
-    formData.append("file", file);
+    files.forEach((file) => formData.append("files", file));
 
     ocrBtn.disabled = true;
     try {
