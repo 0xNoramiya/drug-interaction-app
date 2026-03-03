@@ -3,6 +3,14 @@ version: '3.8'
 services:
   web:
     build: .
+    env_file:
+      - .env
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-4.1-mini}
+      OPENAI_ADVICE_MODEL: ${OPENAI_ADVICE_MODEL:-gpt-4.1-mini}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-30}
+      MAX_OCR_IMAGE_BYTES: ${MAX_OCR_IMAGE_BYTES:-8388608}
     ports:
       - "8000:8000"
     volumes:

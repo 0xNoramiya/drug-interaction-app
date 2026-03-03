@@ -196,6 +196,12 @@ button:disabled {
     position: relative;
 }
 
+.ocr-controls {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.65rem;
+}
+
 .suggestions-list {
     position: absolute;
     top: calc(100% + 0.25rem);
@@ -267,6 +273,27 @@ button:disabled {
     gap: 0.55rem;
 }
 
+.ocr-detected-list {
+    min-height: 2.5rem;
+    border: 1px dashed #bdd0d5;
+    border-radius: 12px;
+    padding: 0.55rem;
+    margin-bottom: 0.35rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.42rem;
+}
+
+.ocr-chip {
+    border-radius: 999px;
+    background: #ebf4ff;
+    color: #1f4e8c;
+    border: 1px solid #c6dbf7;
+    padding: 0.3rem 0.65rem;
+    font-size: 0.86rem;
+    font-weight: 700;
+}
+
 .interaction-item {
     border: 1px solid #d7e2e6;
     border-left: 4px solid #d57d49;
@@ -284,6 +311,31 @@ button:disabled {
     font-weight: 800;
     color: #8f411a;
     margin-bottom: 0.25rem;
+}
+
+.advice-card {
+    margin-top: 0.85rem;
+    border-top: 1px solid #e2eaf0;
+    padding-top: 0.85rem;
+}
+
+.advice-risk {
+    margin: 0.15rem 0 0.3rem;
+    font-size: 0.84rem;
+    letter-spacing: 0.04em;
+    font-weight: 800;
+    color: #1e3f63;
+    text-transform: uppercase;
+}
+
+.advice-actions {
+    margin: 0.45rem 0 0.45rem 1rem;
+    padding: 0;
+    color: var(--muted);
+}
+
+.advice-actions li {
+    margin-bottom: 0.3rem;
 }
 
 .admin-list {
@@ -331,7 +383,8 @@ button:disabled {
         grid-template-columns: 1fr;
     }
 
-    .search-container {
+    .search-container,
+    .ocr-controls {
         grid-template-columns: 1fr;
     }
 

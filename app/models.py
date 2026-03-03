@@ -44,6 +44,38 @@ class InteractionResponse(BaseModel):
     quota: QuotaStatus
 
 
+class AIAdvice(BaseModel):
+    risk_level: str
+    summary: constr(strip_whitespace=True, min_length=1, max_length=600)
+    action_items: List[constr(strip_whitespace=True, min_length=1, max_length=200)]
+    safety_note: constr(strip_whitespace=True, min_length=1, max_length=300)
+
+    @validator("risk_level")
+    def validate_risk_level(cls, value):
+        normalized = value.strip().lower()
+        allowed = {"low", "moderate", "high", "unknown"}
+        if normalized not in allowed:
+            raise ValueError("risk_level must be one of: low, moderate, high, unknown")
+        return normalized
+
+    @validator("action_items")
+    def validate_action_items(cls, value):
+        if not value:
+            raise ValueError("At least one action item is required")
+        if len(value) > 5:
+            raise ValueError("A maximum of 5 action items is allowed")
+        return value
+
+
+class OCRInteractionResponse(BaseModel):
+    extracted_drugs: List[str]
+    matched_drugs: List[str]
+    unmatched_drugs: List[str]
+    interactions: List[Interaction]
+    advice: AIAdvice
+    quota: QuotaStatus
+
+
 IDENTIFIER_REGEX = re.compile(r"^[a-zA-Z0-9._@+-]+$")
 
 

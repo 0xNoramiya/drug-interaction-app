@@ -35,6 +35,16 @@ const checkBtn = document.getElementById("check-btn");
 const clearBtn = document.getElementById("clear-btn");
 const resultsSection = document.getElementById("results-section");
 const interactionList = document.getElementById("interaction-list");
+const ocrFileInput = document.getElementById("ocr-file");
+const ocrBtn = document.getElementById("ocr-btn");
+const ocrSummary = document.getElementById("ocr-summary");
+const ocrDetected = document.getElementById("ocr-detected");
+const ocrUnmatched = document.getElementById("ocr-unmatched");
+const aiAdviceCard = document.getElementById("ai-advice-card");
+const aiRisk = document.getElementById("ai-risk");
+const aiSummary = document.getElementById("ai-summary");
+const aiActions = document.getElementById("ai-actions");
+const aiSafety = document.getElementById("ai-safety");
 
 const refreshAdminBtn = document.getElementById("refresh-admin-btn");
 const adminUsers = document.getElementById("admin-users");
@@ -49,6 +59,7 @@ drugInput.addEventListener("input", handleInput);
 addBtn.addEventListener("click", addDrugFromInput);
 checkBtn.addEventListener("click", checkInteractions);
 clearBtn.addEventListener("click", clearAll);
+ocrBtn.addEventListener("click", scanImage);
 
 refreshAdminBtn.addEventListener("click", loadAdminData);
 adminUsers.addEventListener("click", handleAdminUserAction);
@@ -73,13 +84,28 @@ function clearStatuses() {
     setStatus(adminStatus, "");
 }
 
+function resetResults() {
+    interactionList.innerHTML = "";
+    ocrDetected.innerHTML = "";
+    ocrUnmatched.textContent = "";
+    aiRisk.textContent = "";
+    aiSummary.textContent = "";
+    aiActions.innerHTML = "";
+    aiSafety.textContent = "";
+    show(ocrSummary, false);
+    show(aiAdviceCard, false);
+    show(resultsSection, false);
+}
+
 function clearSession() {
     currentUser = null;
     currentQuota = null;
     selectedDrugs.clear();
     renderTags();
-    interactionList.innerHTML = "";
-    resultsSection.classList.add("hidden");
+    if (ocrFileInput) {
+        ocrFileInput.value = "";
+    }
+    resetResults();
 }
 
 function isAuthenticated() {
@@ -123,21 +149,31 @@ function renderRoute() {
         userPlan.textContent = premium ? "Premium Account" : "Free Account";
         userQuota.textContent = getQuotaSummary(currentQuota);
         requestPremiumBtn.classList.toggle("hidden", premium);
-        checkBtn.disabled = !premium && currentQuota && currentQuota.remaining_today === 0;
+        const outOfQuota = !premium && currentQuota && currentQuota.remaining_today === 0;
+        checkBtn.disabled = Boolean(outOfQuota);
+        ocrBtn.disabled = Boolean(outOfQuota);
     }
 }
 
 async function apiRequest(path, options = {}) {
     const method = options.method || "GET";
     const useAuth = options.useAuth !== false;
+    const hasFormData = Boolean(options.formData);
 
-    const headers = { "Content-Type": "application/json" };
+    const headers = options.headers ? { ...options.headers } : {};
+    let body;
+    if (hasFormData) {
+        body = options.formData;
+    } else {
+        headers["Content-Type"] = "application/json";
+        body = options.body ? JSON.stringify(options.body) : undefined;
+    }
 
     const res = await fetch(`${API_BASE}${path}`, {
         method,
         credentials: "same-origin",
         headers,
-        body: options.body ? JSON.stringify(options.body) : undefined
+        body
     });
 
     let payload = {};
@@ -324,8 +360,10 @@ function removeDrug(name) {
 function clearAll() {
     selectedDrugs.clear();
     renderTags();
-    interactionList.innerHTML = "";
-    resultsSection.classList.add("hidden");
+    if (ocrFileInput) {
+        ocrFileInput.value = "";
+    }
+    resetResults();
 }
 
 function renderTags() {
@@ -375,6 +413,47 @@ function renderInteractions(interactions) {
     });
 }
 
+function renderDetectedDrugs(drugs, unmatched) {
+    ocrDetected.innerHTML = "";
+    if (!drugs || !drugs.length) {
+        show(ocrSummary, false);
+        return;
+    }
+
+    drugs.forEach((name) => {
+        const chip = document.createElement("span");
+        chip.className = "ocr-chip";
+        chip.textContent = name;
+        ocrDetected.appendChild(chip);
+    });
+
+    if (unmatched && unmatched.length) {
+        ocrUnmatched.textContent = `Not matched in database: ${unmatched.join(", ")}`;
+    } else {
+        ocrUnmatched.textContent = "";
+    }
+
+    show(ocrSummary, true);
+}
+
+function renderAdvice(advice) {
+    if (!advice) {
+        show(aiAdviceCard, false);
+        return;
+    }
+
+    aiRisk.textContent = `Risk: ${(advice.risk_level || "unknown").toUpperCase()}`;
+    aiSummary.textContent = advice.summary || "";
+    aiActions.innerHTML = "";
+    (advice.action_items || []).forEach((item) => {
+        const li = document.createElement("li");
+        li.textContent = item;
+        aiActions.appendChild(li);
+    });
+    aiSafety.textContent = advice.safety_note || "";
+    show(aiAdviceCard, true);
+}
+
 async function checkInteractions() {
     clearStatuses();
     if (!isAuthenticated() || isAdmin()) {
@@ -393,10 +472,46 @@ async function checkInteractions() {
         });
         currentQuota = payload.quota;
         renderRoute();
+        renderDetectedDrugs([], []);
+        renderAdvice(null);
         renderInteractions(payload.interactions || []);
         show(resultsSection, true);
     } catch (err) {
         setStatus(userStatus, err.message, true);
+    }
+}
+
+async function scanImage() {
+    clearStatuses();
+    if (!isAuthenticated() || isAdmin()) {
+        return;
+    }
+
+    const file = ocrFileInput.files && ocrFileInput.files[0];
+    if (!file) {
+        setStatus(userStatus, "Select an image first.", true);
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    ocrBtn.disabled = true;
+    try {
+        const payload = await apiRequest("/check/ocr", {
+            method: "POST",
+            formData
+        });
+        currentQuota = payload.quota;
+        renderRoute();
+        renderDetectedDrugs(payload.extracted_drugs || [], payload.unmatched_drugs || []);
+        renderInteractions(payload.interactions || []);
+        renderAdvice(payload.advice || null);
+        show(resultsSection, true);
+    } catch (err) {
+        setStatus(userStatus, err.message, true);
+    } finally {
+        renderRoute();
     }
 }
 

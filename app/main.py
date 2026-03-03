@@ -2,19 +2,22 @@ import base64
 import binascii
 import hashlib
 import hmac
+import json
 import os
+import re
 import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .database import get_app_db_connection, get_interactions_db_connection, init_app_db
 from .models import (
+    AIAdvice,
     AdminPremiumDecisionRequest,
     AdminSetPremiumRequest,
     AdminUserResponse,
@@ -26,12 +29,22 @@ from .models import (
     LoginRequest,
     MeResponse,
     MessageResponse,
+    OCRInteractionResponse,
     PremiumRequestCreate,
     PremiumRequestResponse,
     QuotaStatus,
     RegisterRequest,
     UserProfile,
 )
+
+try:
+    from openai import APIConnectionError, APIError, APITimeoutError, OpenAI, RateLimitError
+except ImportError:  # pragma: no cover - handled at runtime if dependency is missing
+    OpenAI = None
+    APIConnectionError = Exception
+    APIError = Exception
+    APITimeoutError = Exception
+    RateLimitError = Exception
 
 app = FastAPI(title="Drug Interaction Checker")
 
@@ -66,11 +79,26 @@ AUTH_MAX_FAILED_ATTEMPTS = int(os.getenv("AUTH_MAX_FAILED_ATTEMPTS", "8"))
 AUTH_WINDOW_SECONDS = int(os.getenv("AUTH_WINDOW_SECONDS", str(15 * 60)))
 AUTH_BLOCK_SECONDS = int(os.getenv("AUTH_BLOCK_SECONDS", str(15 * 60)))
 ENABLE_HSTS = env_bool("ENABLE_HSTS", False)
+MAX_DRUGS_PER_CHECK = 25
+MAX_DRUG_NAME_LENGTH = 200
+
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_token")
 COOKIE_SECURE = env_bool("COOKIE_SECURE", False)
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
 if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     COOKIE_SAMESITE = "lax"
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4.1-mini").strip()
+OPENAI_ADVICE_MODEL = os.getenv("OPENAI_ADVICE_MODEL", OPENAI_VISION_MODEL).strip()
+OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
+MAX_OCR_IMAGE_BYTES = int(os.getenv("MAX_OCR_IMAGE_BYTES", str(8 * 1024 * 1024)))
+OCR_ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_openai_client: Optional["OpenAI"] = None
+AI_ADVICE_DISCLAIMER = (
+    "This guidance is informational only and not medical advice. "
+    "Please consult a licensed healthcare professional before making medication decisions."
+)
 
 SYNONYMS = {
     "aspirin": "acetylsalicylic acid",
@@ -448,6 +476,399 @@ def consume_check_quota(conn: sqlite3.Connection, user_id: int, is_premium: bool
     conn.commit()
 
     return get_quota_status(conn, user_id, is_premium)
+
+
+def require_quota_available(conn: sqlite3.Connection, user_id: int, is_premium: bool) -> None:
+    quota = get_quota_status(conn, user_id, is_premium)
+    if (not is_premium) and quota.remaining_today == 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Daily free limit reached ({FREE_DAILY_LIMIT} checks/day). Upgrade to premium for unlimited checks.",
+        )
+
+
+def normalize_drug_name(raw_name: str) -> str:
+    normalized = " ".join(raw_name.strip().lower().split())
+    normalized = normalized.strip(".,;:/\\|")
+    if not normalized:
+        return ""
+    if "(" in normalized and normalized.endswith(")"):
+        normalized = normalized.split("(")[0].strip()
+    normalized = SYNONYMS.get(normalized, normalized)
+    if len(normalized) > MAX_DRUG_NAME_LENGTH:
+        return ""
+    if not any(char.isalpha() for char in normalized):
+        return ""
+    return normalized
+
+
+def normalize_drug_candidates(drug_names: List[str]) -> Tuple[List[str], Dict[str, str]]:
+    normalized_names: List[str] = []
+    display_map: Dict[str, str] = {}
+    seen = set()
+
+    for value in drug_names:
+        if not isinstance(value, str):
+            continue
+        display_name = " ".join(value.strip().split())
+        if not display_name:
+            continue
+        normalized = normalize_drug_name(display_name)
+        if not normalized:
+            continue
+        display_map.setdefault(normalized, display_name)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_names.append(normalized)
+        if len(normalized_names) >= MAX_DRUGS_PER_CHECK:
+            break
+
+    return normalized_names, display_map
+
+
+def fetch_interactions_for_names(cleaned_names: List[str]) -> Tuple[List[Interaction], List[str]]:
+    if not cleaned_names:
+        return [], []
+
+    conn = get_interactions_db_connection()
+    cursor = conn.cursor()
+    try:
+        placeholders = ",".join(["?"] * len(cleaned_names))
+        cursor.execute(f"SELECT id, name FROM drugs WHERE name IN ({placeholders})", cleaned_names)
+        drug_rows = cursor.fetchall()
+        if not drug_rows:
+            return [], []
+
+        drug_name_set = {str(row["name"]) for row in drug_rows}
+        matched_cleaned_names = [name for name in cleaned_names if name in drug_name_set]
+        drug_map = {row["id"]: str(row["name"]) for row in drug_rows}
+        drug_ids = list(drug_map.keys())
+
+        if len(drug_ids) < 2:
+            return [], matched_cleaned_names
+
+        id_placeholders = ",".join(["?"] * len(drug_ids))
+        cursor.execute(
+            f"""
+            SELECT DISTINCT
+                CASE
+                    WHEN drug_a_id < drug_b_id THEN drug_a_id
+                    ELSE drug_b_id
+                END AS drug_a_id,
+                CASE
+                    WHEN drug_a_id < drug_b_id THEN drug_b_id
+                    ELSE drug_a_id
+                END AS drug_b_id,
+                description
+            FROM interactions
+            WHERE drug_a_id IN ({id_placeholders})
+              AND drug_b_id IN ({id_placeholders})
+              AND drug_a_id != drug_b_id
+            ORDER BY drug_a_id, drug_b_id
+            LIMIT ?
+            """,
+            drug_ids + drug_ids + [MAX_INTERACTION_RESULTS],
+        )
+
+        seen_interactions = set()
+        interactions: List[Interaction] = []
+        for row in cursor.fetchall():
+            description = " ".join(str(row["description"]).split())
+            interaction_key = (row["drug_a_id"], row["drug_b_id"], description.lower())
+            if interaction_key in seen_interactions:
+                continue
+            seen_interactions.add(interaction_key)
+            interactions.append(
+                Interaction(
+                    drug_a=drug_map[row["drug_a_id"]].title(),
+                    drug_b=drug_map[row["drug_b_id"]].title(),
+                    description=description,
+                )
+            )
+
+        return interactions, matched_cleaned_names
+    finally:
+        conn.close()
+
+
+def get_openai_client() -> "OpenAI":
+    global _openai_client
+    if OpenAI is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OpenAI dependency is not installed on the server",
+        )
+    if not OPENAI_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OpenAI API key is not configured on the server",
+        )
+    if _openai_client is None:
+        _openai_client = OpenAI(
+            api_key=OPENAI_API_KEY,
+            timeout=OPENAI_TIMEOUT_SECONDS,
+        )
+    return _openai_client
+
+
+def parse_json_object(text: str) -> Dict:
+    if not isinstance(text, str):
+        raise ValueError("Expected a JSON string")
+    compact = text.strip()
+    if compact.startswith("```"):
+        compact = re.sub(r"^```(?:json)?", "", compact).strip()
+        compact = compact.rstrip("`").strip()
+    start = compact.find("{")
+    end = compact.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("Missing JSON object")
+    return json.loads(compact[start : end + 1])
+
+
+def detect_image_mime(image_bytes: bytes) -> str:
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def read_and_validate_ocr_image(file: UploadFile) -> Tuple[bytes, str]:
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    if content_type == "image/jpg":
+        content_type = "image/jpeg"
+
+    if content_type and content_type not in OCR_ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Unsupported file type. Use JPEG, PNG, or WEBP images.",
+        )
+
+    try:
+        image_bytes = file.file.read(MAX_OCR_IMAGE_BYTES + 1)
+    finally:
+        try:
+            file.file.close()
+        except Exception:
+            pass
+
+    if not image_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+    if len(image_bytes) > MAX_OCR_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Image too large. Max size is {MAX_OCR_IMAGE_BYTES // (1024 * 1024)} MB.",
+        )
+
+    detected_mime = detect_image_mime(image_bytes)
+    if not detected_mime:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Invalid image file. Use JPEG, PNG, or WEBP images.",
+        )
+    if content_type and detected_mime != content_type:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image content type does not match uploaded file data.",
+        )
+
+    return image_bytes, detected_mime
+
+
+def build_fallback_advice(interaction_count: int, matched_count: int, unmatched_count: int) -> AIAdvice:
+    if interaction_count >= 3:
+        risk_level = "high"
+    elif interaction_count > 0:
+        risk_level = "moderate"
+    elif matched_count >= 2:
+        risk_level = "low"
+    else:
+        risk_level = "unknown"
+
+    if interaction_count > 0:
+        summary = "Potential drug interactions were found. Review each interaction before combining these medicines."
+    elif matched_count >= 2:
+        summary = "No direct interaction records were found in the current dataset for the detected medicines."
+    else:
+        summary = "Not enough recognized medicines were detected to produce a full interaction assessment."
+
+    action_items = [
+        "Verify medicine names and strengths against the original prescription labels.",
+        "Consult a pharmacist or physician before changing or combining medications.",
+    ]
+    if interaction_count > 0:
+        action_items.append("Seek urgent care if severe symptoms appear after taking these medicines together.")
+    if unmatched_count > 0:
+        action_items.append("Re-upload a clearer image for medicines that could not be matched in the database.")
+
+    return AIAdvice(
+        risk_level=risk_level,
+        summary=summary,
+        action_items=action_items[:5],
+        safety_note=AI_ADVICE_DISCLAIMER,
+    )
+
+
+def extract_drugs_from_image(image_bytes: bytes, mime_type: str) -> List[str]:
+    client = get_openai_client()
+    image_data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+    try:
+        completion = client.chat.completions.create(
+            model=OPENAI_VISION_MODEL,
+            temperature=0,
+            max_tokens=300,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract medicine names from the provided image. "
+                        "Return only JSON with the schema: {\"drugs\": [\"name\"]}. "
+                        "Do not include dosage, strength, instructions, brands unless brand text is all that is visible, "
+                        "and do not output duplicates."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract all visible medicine names from this image."},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                },
+            ],
+        )
+    except (APITimeoutError, APIConnectionError, RateLimitError, APIError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="OCR service is temporarily unavailable. Please retry.",
+        )
+
+    content = ""
+    if completion.choices:
+        content = completion.choices[0].message.content or ""
+
+    try:
+        payload = parse_json_object(content)
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="OCR service returned an invalid response",
+        )
+
+    candidates = payload.get("drugs", [])
+    if not isinstance(candidates, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="OCR service returned an invalid response",
+        )
+
+    extracted: List[str] = []
+    for item in candidates:
+        if not isinstance(item, str):
+            continue
+        cleaned = " ".join(item.strip().split())
+        if not cleaned:
+            continue
+        if len(cleaned) > MAX_DRUG_NAME_LENGTH:
+            cleaned = cleaned[:MAX_DRUG_NAME_LENGTH].strip()
+        extracted.append(cleaned)
+        if len(extracted) >= MAX_DRUGS_PER_CHECK:
+            break
+
+    if not extracted:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No drug names detected from the uploaded image.",
+        )
+
+    return extracted
+
+
+def generate_ai_advice(
+    extracted_drugs: List[str],
+    matched_drugs: List[str],
+    unmatched_drugs: List[str],
+    interactions: List[Interaction],
+) -> AIAdvice:
+    client = get_openai_client()
+    prompt_payload = {
+        "detected_drugs": extracted_drugs,
+        "matched_drugs": matched_drugs,
+        "unmatched_drugs": unmatched_drugs,
+        "interactions": [
+            {
+                "drug_a": item.drug_a,
+                "drug_b": item.drug_b,
+                "description": item.description,
+            }
+            for item in interactions[:25]
+        ],
+    }
+
+    try:
+        completion = client.chat.completions.create(
+            model=OPENAI_ADVICE_MODEL,
+            temperature=0.2,
+            max_tokens=420,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a medication safety assistant. "
+                        "Return only JSON with this schema: "
+                        "{\"risk_level\":\"low|moderate|high|unknown\","
+                        "\"summary\":\"...\","
+                        "\"action_items\":[\"...\"],"
+                        "\"safety_note\":\"...\"}. "
+                        "Keep summary concise, action_items practical, and avoid diagnosis. "
+                        "The safety_note must explicitly tell the user to consult a licensed healthcare professional."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Generate guidance from this verified interaction dataset:\n"
+                        f"{json.dumps(prompt_payload, ensure_ascii=True)}"
+                    ),
+                },
+            ],
+        )
+    except (APITimeoutError, APIConnectionError, RateLimitError, APIError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI advice service is temporarily unavailable. Please retry.",
+        )
+
+    content = ""
+    if completion.choices:
+        content = completion.choices[0].message.content or ""
+
+    try:
+        payload = parse_json_object(content)
+        advice = AIAdvice(
+            risk_level=str(payload.get("risk_level", "")).strip(),
+            summary=str(payload.get("summary", "")).strip(),
+            action_items=[
+                " ".join(item.strip().split())
+                for item in payload.get("action_items", [])
+                if isinstance(item, str) and item.strip()
+            ],
+            safety_note=str(payload.get("safety_note", "")).strip(),
+        )
+        # Enforce mandatory disclaimer server-side.
+        advice.safety_note = AI_ADVICE_DISCLAIMER
+        return advice
+    except Exception:
+        return build_fallback_advice(
+            interaction_count=len(interactions),
+            matched_count=len(matched_drugs),
+            unmatched_count=len(unmatched_drugs),
+        )
 
 
 @app.post("/auth/register", response_model=AuthResponse)
@@ -834,66 +1255,60 @@ def check_interactions(request: InteractionCheckRequest, session_data=Depends(ge
     finally:
         app_conn.close()
 
-    conn = get_interactions_db_connection()
-    cursor = conn.cursor()
+    cleaned_names, _display_map = normalize_drug_candidates(request.drugs)
+    interactions, _matched_names = fetch_interactions_for_names(cleaned_names)
+    return InteractionResponse(interactions=interactions, quota=quota)
 
-    cleaned_names = []
-    seen_names = set()
-    for d in request.drugs:
-        d_lower = d.lower().strip()
-        if "(" in d_lower and d_lower.endswith(")"):
-            d_lower = d_lower.split("(")[0].strip()
-        d_lower = SYNONYMS.get(d_lower, d_lower)
-        if d_lower not in seen_names:
-            seen_names.add(d_lower)
-            cleaned_names.append(d_lower)
-    
+
+@app.post("/check/ocr", response_model=OCRInteractionResponse)
+def check_interactions_ocr(
+    file: UploadFile = File(...),
+    session_data=Depends(get_authenticated_session),
+):
+    user = session_data["user"]
+
+    app_conn = get_app_db_connection()
     try:
-        placeholders = ','.join(['?'] * len(cleaned_names))
-        cursor.execute(f"SELECT id, name FROM drugs WHERE name IN ({placeholders})", cleaned_names)
-        drug_rows = cursor.fetchall()
-        
-        drug_map = {row['id']: row['name'] for row in drug_rows}
-        drug_ids = list(drug_map.keys())
-        
-        if len(drug_ids) < 2:
-            return InteractionResponse(interactions=[], quota=quota)
-
-        id_placeholders = ','.join(['?'] * len(drug_ids))
-        query = f"""
-            SELECT DISTINCT
-                CASE
-                    WHEN drug_a_id < drug_b_id THEN drug_a_id
-                    ELSE drug_b_id
-                END AS drug_a_id,
-                CASE
-                    WHEN drug_a_id < drug_b_id THEN drug_b_id
-                    ELSE drug_a_id
-                END AS drug_b_id,
-                description
-            FROM interactions
-            WHERE drug_a_id IN ({id_placeholders})
-              AND drug_b_id IN ({id_placeholders})
-              AND drug_a_id != drug_b_id
-            ORDER BY drug_a_id, drug_b_id
-            LIMIT ?
-        """
-        
-        cursor.execute(query, drug_ids + drug_ids + [MAX_INTERACTION_RESULTS])
-        interaction_rows = cursor.fetchall()
-        
-        interactions = [
-            Interaction(
-                drug_a=drug_map[row['drug_a_id']].title(),
-                drug_b=drug_map[row['drug_b_id']].title(),
-                description=row['description']
-            )
-            for row in interaction_rows
-        ]
-
-        return InteractionResponse(interactions=interactions, quota=quota)
+        require_quota_available(app_conn, user["id"], user["is_premium"])
     finally:
-        conn.close()
+        app_conn.close()
+
+    image_bytes, mime_type = read_and_validate_ocr_image(file)
+    extracted_candidates = extract_drugs_from_image(image_bytes, mime_type)
+    cleaned_names, display_map = normalize_drug_candidates(extracted_candidates)
+    if not cleaned_names:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No valid drug names were detected from the uploaded image.",
+        )
+
+    interactions, matched_cleaned_names = fetch_interactions_for_names(cleaned_names)
+    matched_set = set(matched_cleaned_names)
+    extracted_drugs = [display_map.get(name, name.title()) for name in cleaned_names]
+    matched_drugs = [display_map.get(name, name.title()) for name in matched_cleaned_names]
+    unmatched_drugs = [display_map.get(name, name.title()) for name in cleaned_names if name not in matched_set]
+
+    advice = generate_ai_advice(
+        extracted_drugs=extracted_drugs,
+        matched_drugs=matched_drugs,
+        unmatched_drugs=unmatched_drugs,
+        interactions=interactions,
+    )
+
+    app_conn = get_app_db_connection()
+    try:
+        quota = consume_check_quota(app_conn, user["id"], user["is_premium"])
+    finally:
+        app_conn.close()
+
+    return OCRInteractionResponse(
+        extracted_drugs=extracted_drugs,
+        matched_drugs=matched_drugs,
+        unmatched_drugs=unmatched_drugs,
+        interactions=interactions,
+        advice=advice,
+        quota=quota,
+    )
 
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 if os.path.isdir(frontend_path):

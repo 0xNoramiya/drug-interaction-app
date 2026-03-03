@@ -8,6 +8,7 @@ A web application to check for potential interactions between multiple medicatio
 - **Admin Controls**: Admins can view users, review premium requests, and activate/deactivate premium.
 - **Autocomplete Search**: Quickly find drugs from a large DrugBank-derived dataset.
 - **Multi-Drug Support**: Check interactions across an unlimited number of selected drugs per request.
+- **OCR + AI Advice**: Upload a prescription image to detect medicines with OpenAI Vision, then receive concise AI safety guidance.
 - **Clear Interaction Details**: Readable descriptions of potential risks and interaction mechanisms.
 - **Responsive UI**: A modern, mobile-friendly interface with a glassmorphism aesthetic.
 
@@ -25,22 +26,33 @@ The application uses DrugBank XML data from `full database.xml` in the project r
 ### Using Docker (Recommended)
 1. Ensure you have Docker and Docker Compose installed.
 2. Clone the repository and navigate to the project directory.
-3. Start the application:
+3. Create local secrets file:
+   ```bash
+   cp .env.example .env
+   # then edit .env and set OPENAI_API_KEY
+   ```
+4. Start the application:
    ```bash
    docker-compose up --build -d
    ```
-4. Access the UI at `http://localhost:8000`.
+5. Access the UI at `http://localhost:8000`.
 
 ### Manual Setup
 1. Install Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-2. Place the DrugBank export file at `full database.xml` in the project root, then initialize the SQLite database:
+2. Configure environment variables:
+   ```bash
+   cp .env.example .env
+   # set OPENAI_API_KEY in .env
+   set -a && source .env && set +a
+   ```
+3. Place the DrugBank export file at `full database.xml` in the project root, then initialize the SQLite database:
    ```bash
    python scripts/parse_drugbank.py
    ```
-3. Run the server:
+4. Run the server:
    ```bash
    uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
@@ -48,6 +60,7 @@ The application uses DrugBank XML data from `full database.xml` in the project r
 ## 👥 Auth and Membership
 - The **first registered user** becomes an admin automatically.
 - Free users are rate-limited to **10 `/check` requests per UTC day**.
+- The same quota applies to OCR checks (`/check/ocr`), while premium users remain unlimited.
 - Premium users have no daily check limit.
 - Users can submit premium requests from the UI; admins can approve/reject and toggle premium status.
 - Registration requires strong passwords (uppercase, lowercase, number, minimum 8 chars).
@@ -69,6 +82,12 @@ The application uses DrugBank XML data from `full database.xml` in the project r
   - `AUTH_BLOCK_SECONDS`
   - `MAX_INTERACTION_RESULTS`
   - `ENABLE_HSTS=true` (when running behind HTTPS)
+  - `OPENAI_API_KEY` (required for OCR + AI advice)
+  - `OPENAI_VISION_MODEL` (default: `gpt-4.1-mini`)
+  - `OPENAI_ADVICE_MODEL` (default: same as vision model)
+  - `OPENAI_TIMEOUT_SECONDS`
+  - `MAX_OCR_IMAGE_BYTES` (default: 8MB)
+- Keep `.env` out of version control (already ignored) and never commit real API keys.
 
 ## ⚖️ Disclaimer
 *This tool is for informational purposes only. The data provided may not be exhaustive or up-to-date. Always consult a healthcare professional for medical advice.*

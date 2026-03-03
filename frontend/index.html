@@ -76,10 +76,34 @@
           </div>
         </div>
 
+        <div class="card input-card">
+          <div class="panel-head">
+            <h2>Scan Prescription</h2>
+          </div>
+          <div class="ocr-controls">
+            <input type="file" id="ocr-file" accept="image/png,image/jpeg,image/webp">
+            <button id="ocr-btn" class="secondary-btn">Scan Image</button>
+          </div>
+        </div>
+
         <div id="results-section" class="hidden">
           <div class="card list-card">
+            <div id="ocr-summary" class="hidden">
+              <h3 class="section-title">Detected Drugs</h3>
+              <div id="ocr-detected" class="ocr-detected-list"></div>
+              <p id="ocr-unmatched" class="panel-copy"></p>
+            </div>
+
             <h2>Interaction Details</h2>
             <div id="interaction-list"></div>
+
+            <div id="ai-advice-card" class="advice-card hidden">
+              <h3 class="section-title">AI Advice</h3>
+              <p id="ai-risk" class="advice-risk"></p>
+              <p id="ai-summary" class="panel-copy"></p>
+              <ul id="ai-actions" class="advice-actions"></ul>
+              <p id="ai-safety" class="panel-copy"></p>
+            </div>
           </div>
         </div>
       </section>
