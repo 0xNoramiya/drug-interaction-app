@@ -1,96 +1,104 @@
 # Drug Interaction Checker
 
-A web application to check for potential interactions between multiple medications. Built with a FastAPI backend and a clean Vanilla JS frontend.
+Drug Interaction Checker is a FastAPI + SQLite web application for medication interaction lookup with account-based access control, daily free-tier limits, premium management, OCR-based drug extraction, and AI-generated safety guidance.
 
-## 🚀 Features
-- **Secure Accounts**: Register/login with server-side password hashing and token-based sessions.
-- **Usage Plans**: Free users get 10 interaction checks/day, premium users get unlimited checks.
-- **Admin Controls**: Admins can view users, review premium requests, and activate/deactivate premium.
-- **Autocomplete Search**: Quickly find drugs from a large DrugBank-derived dataset.
-- **Multi-Drug Support**: Check interactions across an unlimited number of selected drugs per request.
-- **OCR + AI Advice**: Upload a prescription image to detect medicines with OpenAI Vision, then receive concise AI safety guidance.
-- **Clear Interaction Details**: Readable descriptions of potential risks and interaction mechanisms.
-- **Responsive UI**: A modern, mobile-friendly interface with a glassmorphism aesthetic.
+## Features
+- Account system with secure registration, login, logout, and server-side session handling
+- Role-based access: admin and standard users
+- Premium workflow: user requests and admin approval/rejection
+- Usage controls: free users are limited to 10 checks/day, premium users are unlimited
+- Drug search autocomplete from DrugBank-derived data
+- Interaction checking across selected medicines with duplicate-pair normalization
+- OCR upload endpoint (`/check/ocr`) for extracting drug names from prescription images
+- AI advice output with mandatory healthcare-professional disclaimer
 
-## 🛠️ Tech Stack
-- **Backend**: FastAPI (Python 3.9)
-- **Database**: SQLite (`interactions.db` for drug data, `app.db` for users/sessions/usage)
-- **Frontend**: Vanilla JavaScript, CSS3, HTML5
-- **Deployment**: Docker, Docker Compose
+## Tech Stack
+- Backend: FastAPI, Pydantic, Uvicorn
+- Datastores: SQLite (`data/interactions.db`, `data/app.db`)
+- Frontend: Vanilla JavaScript, HTML, CSS
+- Deployment: Docker, Docker Compose
 
-## 📊 Data Source
-The application uses DrugBank XML data from `full database.xml` in the project root. The ingestion script streams the XML and rebuilds `data/interactions.db`, which is the runtime source of truth.
+## Data Source
+The interaction dataset is generated from DrugBank XML (`full database.xml`) using:
 
-## 📦 Installation & Setup
+```bash
+python scripts/parse_drugbank.py
+```
 
-### Using Docker (Recommended)
-1. Ensure you have Docker and Docker Compose installed.
-2. Clone the repository and navigate to the project directory.
-3. Create local secrets file:
-   ```bash
-   cp .env.example .env
-   # then edit .env and set OPENAI_API_KEY
-   ```
-4. Start the application:
-   ```bash
-   docker-compose up --build -d
-   ```
-5. Access the UI at `http://localhost:8000`.
+This rebuilds `data/interactions.db`, which is the runtime source of truth for drug and interaction data.
 
-### Manual Setup
-1. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. Configure environment variables:
-   ```bash
-   cp .env.example .env
-   # set OPENAI_API_KEY in .env
-   set -a && source .env && set +a
-   ```
-3. Place the DrugBank export file at `full database.xml` in the project root, then initialize the SQLite database:
-   ```bash
-   python scripts/parse_drugbank.py
-   ```
-4. Run the server:
-   ```bash
-   uvicorn app.main:app --host 0.0.0.0 --port 8000
-   ```
+## Installation
 
-## 👥 Auth and Membership
-- The **first registered user** becomes an admin automatically.
-- Free users are rate-limited to **10 `/check` requests per UTC day**.
-- The same quota applies to OCR checks (`/check/ocr`), while premium users remain unlimited.
-- Premium users have no daily check limit.
-- Users can submit premium requests from the UI; admins can approve/reject and toggle premium status.
-- Registration requires strong passwords (uppercase, lowercase, number, minimum 8 chars).
+### Docker (Recommended)
+1. Create local environment file:
+```bash
+cp .env.example .env
+```
+2. Edit `.env` and set at minimum:
+```dotenv
+OPENAI_API_KEY=your_real_key
+```
+3. Start the stack:
+```bash
+docker-compose up --build -d
+```
+4. Open:
+- `http://localhost:8000`
 
-## 🔐 Security Notes
-- Session tokens are randomly generated, stored server-side as SHA-256 hashes, and delivered via `HttpOnly` cookies.
-- Login has brute-force protection with temporary lockout after repeated failures.
-- Security headers are enabled (`CSP`, `X-Frame-Options`, `nosniff`, `Permissions-Policy`).
-- Sensitive endpoints are marked `Cache-Control: no-store`.
-- CORS is restricted by default; customize with:
-  - `CORS_ALLOWED_ORIGINS` (comma-separated origins)
-  - `SESSION_TTL_SECONDS`
-  - `SESSION_COOKIE_NAME`
-  - `COOKIE_SECURE`
-  - `COOKIE_SAMESITE`
-  - `MAX_ACTIVE_SESSIONS`
-  - `AUTH_MAX_FAILED_ATTEMPTS`
-  - `AUTH_WINDOW_SECONDS`
-  - `AUTH_BLOCK_SECONDS`
-  - `MAX_INTERACTION_RESULTS`
-  - `ENABLE_HSTS=true` (when running behind HTTPS)
-  - `OPENAI_API_KEY` (required for OCR + AI advice)
-  - `OPENAI_VISION_MODEL` (default: `gpt-4.1-mini`)
-  - `OPENAI_ADVICE_MODEL` (default: same as vision model)
-  - `OPENAI_TIMEOUT_SECONDS`
-  - `MAX_OCR_IMAGE_BYTES` (default: 8MB)
-- Keep `.env` out of version control (already ignored) and never commit real API keys.
+### Manual
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+2. Load environment variables:
+```bash
+cp .env.example .env
+set -a && source .env && set +a
+```
+3. Build interaction DB if needed:
+```bash
+python scripts/parse_drugbank.py
+```
+4. Run API:
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
-## ⚖️ Disclaimer
-*This tool is for informational purposes only. The data provided may not be exhaustive or up-to-date. Always consult a healthcare professional for medical advice.*
+## Environment Variables
+- `OPENAI_API_KEY` (required for OCR + AI advice)
+- `OPENAI_VISION_MODEL` (default: `gpt-4.1-mini`)
+- `OPENAI_ADVICE_MODEL` (default: same as vision model)
+- `OPENAI_TIMEOUT_SECONDS` (default: `30`)
+- `MAX_OCR_IMAGE_BYTES` (default: `8388608`)
+- `FREE_DAILY_LIMIT` (default: `10`)
+- `CORS_ALLOWED_ORIGINS` (CSV list)
+- `ALLOWED_HOSTS` (CSV list)
+- `SESSION_TTL_SECONDS`
+- `SESSION_COOKIE_NAME`
+- `COOKIE_SECURE` (`true` in HTTPS production)
+- `COOKIE_SAMESITE`
+- `MAX_ACTIVE_SESSIONS`
+- `AUTH_MAX_FAILED_ATTEMPTS`
+- `AUTH_WINDOW_SECONDS`
+- `AUTH_BLOCK_SECONDS`
+- `MAX_INTERACTION_RESULTS`
+- `ENABLE_HSTS` (`true` in HTTPS production)
 
-## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Security Notes
+- The OpenAI API key is used only on the backend and is never sent to frontend code.
+- Session tokens are random, stored as server-side hashes, and delivered via `HttpOnly` cookies.
+- Login attempts are protected by lockout/rate controls.
+- Security headers are set (`CSP`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`).
+- Sensitive API routes are marked `Cache-Control: no-store`.
+- Keep `.env` private and out of git.
+
+## Operational Notes
+- The first registered user becomes admin automatically.
+- Admin users can activate/deactivate premium status and review premium requests.
+- OCR checks consume the same daily quota as manual checks.
+
+## Medical Disclaimer
+This application is for informational use only and does not replace clinical judgment. Always consult a licensed healthcare professional for diagnosis and treatment decisions.
+
+## License
+MIT. See `LICENSE`.

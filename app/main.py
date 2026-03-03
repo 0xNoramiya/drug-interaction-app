@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .database import get_app_db_connection, get_interactions_db_connection, init_app_db
 from .models import (
@@ -56,6 +57,16 @@ def parse_cors_origins() -> List[str]:
     return ["http://localhost:8000", "http://127.0.0.1:8000"]
 
 
+def parse_allowed_hosts() -> List[str]:
+    hosts_raw = os.getenv("ALLOWED_HOSTS", "").strip()
+    if hosts_raw:
+        hosts = [host.strip().lower() for host in hosts_raw.split(",") if host.strip()]
+        if "*" in hosts:
+            return ["*"]
+        return hosts
+    return ["localhost", "127.0.0.1", "[::1]"]
+
+
 def env_bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -70,6 +81,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=parse_allowed_hosts())
 
 FREE_DAILY_LIMIT = int(os.getenv("FREE_DAILY_LIMIT", "10"))
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", str(7 * 24 * 60 * 60)))
@@ -88,13 +100,13 @@ COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
 if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     COOKIE_SAMESITE = "lax"
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4.1-mini").strip()
 OPENAI_ADVICE_MODEL = os.getenv("OPENAI_ADVICE_MODEL", OPENAI_VISION_MODEL).strip()
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
 MAX_OCR_IMAGE_BYTES = int(os.getenv("MAX_OCR_IMAGE_BYTES", str(8 * 1024 * 1024)))
 OCR_ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _openai_client: Optional["OpenAI"] = None
+_openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
 AI_ADVICE_DISCLAIMER = (
     "This guidance is informational only and not medical advice. "
     "Please consult a licensed healthcare professional before making medication decisions."
@@ -113,6 +125,7 @@ SYNONYMS = {
 @app.on_event("startup")
 def startup():
     init_app_db()
+    initialize_openai_client()
 
 
 @app.middleware("http")
@@ -592,22 +605,42 @@ def fetch_interactions_for_names(cleaned_names: List[str]) -> Tuple[List[Interac
         conn.close()
 
 
+def initialize_openai_client() -> None:
+    global _openai_client, _openai_api_key
+    if _openai_client is not None or OpenAI is None:
+        return
+
+    if not _openai_api_key:
+        return
+
+    if (not _openai_api_key.startswith("sk-")) or len(_openai_api_key) < 20:
+        return
+
+    _openai_client = OpenAI(
+        api_key=_openai_api_key,
+        timeout=OPENAI_TIMEOUT_SECONDS,
+    )
+    # Scrub raw secret from process env and module-level plaintext after client init.
+    _openai_api_key = ""
+    os.environ.pop("OPENAI_API_KEY", None)
+
+
 def get_openai_client() -> "OpenAI":
-    global _openai_client
+    global _openai_client, _openai_api_key
     if OpenAI is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OpenAI dependency is not installed on the server",
         )
-    if not OPENAI_API_KEY:
+
+    initialize_openai_client()
+    if _openai_client is None:
+        # Best effort: avoid keeping key in env even when configuration is invalid.
+        os.environ.pop("OPENAI_API_KEY", None)
+        _openai_api_key = ""
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OpenAI API key is not configured on the server",
-        )
-    if _openai_client is None:
-        _openai_client = OpenAI(
-            api_key=OPENAI_API_KEY,
-            timeout=OPENAI_TIMEOUT_SECONDS,
+            detail="OpenAI integration is not configured on the server",
         )
     return _openai_client
 
