@@ -85,26 +85,23 @@
   background: rgba(239, 68, 68, 0.16) !important;
 }
 
-#theme-toggle {
-  position: fixed;
-  left: 14px;
-  bottom: 14px;
-  z-index: 99999;
-  border: 1px solid #c9e6e2;
-  border-radius: 12px;
-  background: #ffffff;
-  color: #0f766e;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 10px 12px;
-  cursor: pointer;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+#open-profile-btn {
+  border-color: #c2e0dc !important;
+  color: #0f766e !important;
 }
 
-:root[data-theme="dark"] #theme-toggle {
-  background: #111827;
-  border-color: #334155;
-  color: #93c5fd;
+#open-profile-btn:hover {
+  background: #edf9f7 !important;
+}
+
+:root[data-theme="dark"] #open-profile-btn {
+  border-color: #334155 !important;
+  color: #93c5fd !important;
+  background: #0b1220 !important;
+}
+
+:root[data-theme="dark"] #open-profile-btn:hover {
+  background: #111827 !important;
 }
 
 #history-widget {
@@ -195,6 +192,68 @@
   opacity: 0.8;
 }
 
+#history-widget .hx-page-head {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+
+#history-widget .hx-back-btn {
+  font-size: 12px;
+  padding: 7px 12px;
+}
+
+#history-widget .hx-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+#history-widget .hx-profile-item {
+  border: 1px solid #d9ece8;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #f8fffe;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#history-widget .hx-profile-label {
+  font-size: 11px;
+  opacity: 0.78;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+#history-widget .hx-plan-badge {
+  color: #0f766e;
+}
+
+#history-widget .hx-profile-item-theme {
+  grid-column: 1 / -1;
+}
+
+#history-widget .hx-theme-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+#history-widget .hx-theme-btn {
+  min-width: 88px;
+  pointer-events: auto;
+}
+
+#history-widget .hx-theme-btn.is-active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
 #history-widget .hx-summary {
   margin-top: 8px;
   padding: 10px;
@@ -209,11 +268,23 @@
   border-left-color: #3b82f6;
 }
 
+:root[data-theme="dark"] #history-widget .hx-profile-item {
+  border-color: #334155;
+  background: #0b1220;
+}
+
+:root[data-theme="dark"] #history-widget .hx-plan-badge {
+  color: #93c5fd;
+}
+
+:root[data-theme="dark"] #history-widget .hx-theme-btn.is-active {
+  border-color: #3b82f6;
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
 @media (max-width: 640px) {
-  #theme-toggle {
-    left: 10px;
-    bottom: 10px;
-    padding: 9px 10px;
-    font-size: 11px;
+  #history-widget .hx-profile-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
   }
 }
