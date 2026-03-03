@@ -872,7 +872,7 @@ def generate_ai_advice(
     try:
         completion = client.chat.completions.create(
             model=OPENAI_ADVICE_MODEL,
-            temperature=0.2,
+            temperature=0,
             max_tokens=420,
             response_format={"type": "json_object"},
             messages=[
@@ -885,6 +885,8 @@ def generate_ai_advice(
                         "\"summary\":\"...\","
                         "\"action_items\":[\"...\"],"
                         "\"safety_note\":\"...\"}. "
+                        "Use confident, direct wording based only on the provided interaction data. "
+                        "Avoid weak hedging terms unless the data is incomplete. "
                         "Keep summary concise, action_items practical, and avoid diagnosis. "
                         "The safety_note must explicitly tell the user to consult a licensed healthcare professional."
                     ),
